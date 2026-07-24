@@ -14816,7 +14816,13 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         spinner_widget = Window(
             content=FormattedTextControl(get_spinner_text),
             height=get_spinner_height,
-            wrap_lines=True,
+            # Mirror the status bar's wrap_lines=False: the spinner line is a
+            # reserved single row (_spinner_widget_height is always 1 in
+            # non-minimal-chrome mode), so wide text must not wrap onto a
+            # second row — that would defeat the constant-height invariant that
+            # prevents the mid-turn chrome stack (#70031). Long spinner text is
+            # clipped to one row instead.
+            wrap_lines=False,
         )
 
         # Petdex mascot — right-aligned half-block sprite above the prompt,
