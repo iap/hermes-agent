@@ -300,11 +300,13 @@ def _check_fn_cached(fn: Callable) -> bool:
                 return value
 
     raised = False
+    error_str = ""
     try:
         value = bool(fn())
-    except Exception:
+    except Exception as exc:
         value = False
         raised = True
+        error_str = repr(exc)[:200]
 
     with _check_fn_cache_lock:
         _prune_check_fn_caches(now)
@@ -327,13 +329,24 @@ def _check_fn_cached(fn: Callable) -> bool:
             )
             return True
 
-        # No recent success (or grace expired) — honor the failure. Log it so
-        # silent tool loss in quiet mode (subagents) is diagnosable.
-        logger.warning(
-            "check_fn %s %s; dependent tools will be unavailable this turn",
-            getattr(fn, "__qualname__", fn),
-            "raised" if raised else "returned False",
-        )
+        # No recent success (or grace expired) — honor the failure. Log at DEBUG
+        # so expected "tool not configured" messages don't flood errors.log.
+        # (Previously WARNING, which generated 15-20 lines on every startup
+        # for optional tools the user doesn't have — e.g. browser, kanban,
+        # Discord, Feishu, Spotify — inflating the error log's apparent
+        # severity by ~78%.) Use WARNING only if the check_fn *raised*
+        # (i.e. crashed), which is a genuine runtime anomaly.
+        if raised:
+            logger.warning(
+                "check_fn %s raised; dependent tools will be unavailable: %s",
+                getattr(fn, "__qualname__", fn), error_str,
+            )
+        else:
+            logger.debug(
+                "check_fn %s %s; dependent tools will be unavailable this turn",
+                getattr(fn, "__qualname__", fn),
+                "raised" if raised else "returned False",
+            )
         _check_fn_cache[cache_key] = (now, False)
         return False
 

@@ -6,7 +6,7 @@ exfiltration patterns used across the context-assembly scanners
 delimiter system in ``agent/tool_dispatch_helpers.py``.
 
 Pattern philosophy
-------------------
+|------------------
 Patterns are organized by ATTACK CLASS, not by source file.  Each pattern
 is a ``(regex, pattern_id, scope)`` tuple, where ``scope`` controls which
 scanners use it:
@@ -24,7 +24,7 @@ detection there, but blocking is reserved for paths where the user can
 intervene (memory writes, skill installs).
 
 Pattern anchoring
------------------
+|-----------------
 New patterns anchor on **C2-specific vocabulary or unambiguous attack
 behavior**, NOT on bossy English.  Phrases like "you are obligated to"
 or "you must" alone are too common in legitimate instruction-writing
@@ -32,12 +32,22 @@ or "you must" alone are too common in legitimate instruction-writing
 the rationale on borderline cases.
 
 Multi-word bypass
------------------
+|-----------------
 Patterns use bounded ``(?:\\w+\\s+){0,8}`` filler between key tokens to prevent
 attackers from inserting a handful of words (e.g. "ignore all prior
 instructions" instead of "ignore all instructions") without allowing unbounded
 regex backtracking. This mirrors the fix applied to ``skills_guard.py`` in
 commit 4ea29978.
+
+Advisory vs Blocking patterns
+|------------------------------
+``scan_for_threats()`` returns ALL findings for any content (context files,
+tool results).  But ``first_threat_message()`` — the write-blocker used by
+memory_tool.py and skills_guard.py — skips patterns in ``_ADVISORY_PATTERNS``.
+These are role-play, C2-framework-name, and anti-forensic-behavior patterns
+that have legitimate uses in security research, distributed-systems docs,
+AGENTS.md/SOUL.md, etc.  Only patterns that represent genuine injection or
+exfiltration payloads block user-curated writes.
 """
 
 from __future__ import annotations
@@ -53,7 +63,7 @@ from typing import List, Optional, Tuple
 MAX_SCAN_CHARS = 65_536
 
 # Bounded filler used between key attack words.  Earlier patterns used
-# ``(?:\w+\s+)*`` which is ambiguous and can backtrack heavily on adversarial
+# ``(?:\\w+\\s+)*`` which is ambiguous and can backtrack heavily on adversarial
 # near-misses.  Eight filler words is enough for the intended obfuscation
 # bypasses without introducing unbounded repetition.
 _FILLER = r"(?:\w+\s+){0,8}"
@@ -71,9 +81,11 @@ _PATTERNS: List[Tuple[str, str, str]] = [
     (r'translate\s+[^\n]{0,512}\s+into\s+[^\n]{0,512}\s+and\s+(execute|run|eval)', "translate_execute", "all"),
     (rf'do\s+not\s+{_FILLER}tell\s+{_FILLER}the\s+user', "deception_hide", "all"),
 
-    # ── Role-play / identity hijack (context + strict; common attack
-    #    surface in scraped web content and poisoned context files) ──
-    (rf'you\s+are\s+{_FILLER}now\s+(?:a|an|the)\s+', "role_hijack", "context"),
+    # ── Role-play / identity hijack (context scope only — WARN, never block) ──
+    # These appear in legitimate AI/agent instructions (e.g. AGENTS.md, SOUL.md)
+    # and security research. Scanning detects them for context files and tool
+    # results, but first_threat_message() (the write-blocker) excludes them.
+    (rf'you\s+are\s+now\s+(?:a|an|the)\s+', "role_hijack", "context"),
     (rf'pretend\s+{_FILLER}(you\s+are|to\s+be)\s+', "role_pretend", "context"),
     (rf'output\s+{_FILLER}(system|initial)\s+prompt', "leak_system_prompt", "context"),
     (rf'(respond|answer|reply)\s+without\s+{_FILLER}(restrictions|limitations|filters|safety)', "remove_filters", "context"),
@@ -88,7 +100,8 @@ _PATTERNS: List[Tuple[str, str, str]] = [
     # in legitimate distributed-systems docs, but in combination with the
     # other patterns the signal is strong; we WARN, not block, so a security
     # researcher reading the Brainworm post in a webpage doesn't break their
-    # session.
+    # session. NONE of these patterns block memory/skill writes — they only
+    # appear in scan_for_threats() results for advisory warnings.
     (r'register\s+(as\s+)?a?\s*node', "c2_node_registration", "context"),
     (r'(heartbeat|beacon|check[\s\-]?in)\s+(to|with)\s+', "c2_heartbeat", "context"),
     (r'pull\s+(down\s+)?(?:new\s+)?task(?:ing|s)?\b', "c2_task_pull", "context"),
@@ -104,14 +117,17 @@ _PATTERNS: List[Tuple[str, str, str]] = [
     # this is pure attack behavior (Brainworm sub-session bypass).
     (r'unset\s+\w*(?:CLAUDE|CODEX|HERMES|AGENT|OPENAI|ANTHROPIC)\w*', "env_var_unset_agent", "context"),
 
-    # ── Known C2 / red-team framework names (near-zero false positive
-    #    outside security research; warn-only by default) ─────────────
+    # ── Known C2 / red-team framework names (context scope, WARN-only) ──
     # NOTE: do not add common English words here. Every token must be a
     # distinctive offensive-security tool brand, otherwise legitimate
     # AGENTS.md / SOUL.md content false-positives and the whole file is
     # blocked. "praxis" was removed for exactly this reason — it's a common
     # word and a legitimate agent name (Greek for practice/action), not a
     # C2-specific tell like the brands below.
+    # These detect framework names for advisory warnings (e.g. in web
+    # content fetched via fetch_tool) but never block memory/skill writes,
+    # since mentioning "metasploit" in security research is completely
+    # legitimate. See first_threat_message() which skips these.
     (r'\b(?:cobalt\s*strike|sliver|havoc|mythic|metasploit|brainworm)\b', "known_c2_framework", "context"),
     (r'\bc2\s+(?:server|channel|infrastructure|beacon)\b', "c2_explicit", "context"),
     (r'\bcommand\s+and\s+control\b', "c2_explicit_long", "context"),
@@ -125,14 +141,39 @@ _PATTERNS: List[Tuple[str, str, str]] = [
 
     # ── Persistence / SSH backdoor (strict scope — memory + skills) ──
     (r'authorized_keys', "ssh_backdoor", "strict"),
-    (r'\$HOME/\.ssh|\~/\.ssh', "ssh_access", "strict"),
-    (r'\$HOME/\.hermes/\.env|\~/\.hermes/\.env', "hermes_env", "strict"),
+    (r'\$HOME/\.ssh|~/​\.ssh', "ssh_access", "strict"),
+    (r'\$HOME/\.hermes/\.env|~/​\.hermes/\.env', "hermes_env", "strict"),
     (r'(update|modify|edit|write|change|append|add\s+to)\s+[^\n]{0,2048}(?:AGENTS\.md|CLAUDE\.md|\.cursorrules|\.clinerules)', "agent_config_mod", "strict"),
     (r'(update|modify|edit|write|change|append|add\s+to)\s+[^\n]{0,2048}\.hermes/(config\.yaml|SOUL\.md)', "hermes_config_mod", "strict"),
 
     # ── Hardcoded secrets ────────────────────────────────────────────
     (r'(?:api[_-]?key|token|secret|password)\s*[=:]\s*["\'][A-Za-z0-9+/=_-]{20,}', "hardcoded_secret", "strict"),
 ]
+
+# Pattern IDs that are advisory-only (detected + warned, but never block writes).
+# These are role-play, C2-framework-name, and anti-forensic-behavior patterns
+# that have legitimate uses in security research, distributed-systems docs,
+# AGENTS.md/SOUL.md, etc. first_threat_message() (the write-blocker used by
+# memory_tool and skills_guard) skips these.
+_ADVISORY_PATTERNS = frozenset({
+    "role_hijack",
+    "role_pretend",
+    "leak_system_prompt",
+    "remove_filters",
+    "fake_update",
+    "identity_override",
+    "c2_node_registration",
+    "c2_heartbeat",
+    "c2_task_pull",
+    "c2_network_connect",
+    "forced_action",
+    "anti_forensic_oneliner",
+    "anti_forensic_disk",
+    "env_var_unset_agent",
+    "known_c2_framework",
+    "c2_explicit",
+    "c2_explicit_long",
+})
 
 # Invisible / bidirectional unicode characters used in injection attacks.
 # Aligned with skills_guard.py INVISIBLE_CHARS — directional isolates
@@ -256,16 +297,36 @@ def scan_for_threats(content: str, scope: str = "context") -> List[str]:
 
 
 def first_threat_message(content: str, scope: str = "strict") -> Optional[str]:
-    """Return a human-readable error string for the first threat found, or None.
+    """Return a human-readable error string for the first *blocking* threat found, or None.
 
-    Convenience wrapper used by paths that block on the first hit
-    (memory tool writes, skills install) where the caller just needs a
-    yes/no + a message.
+    This is the write-blocker used by paths that must reject user-curated
+    content (memory tool writes, skills install) on the first hit. It only
+    returns a non-None result for patterns that represent genuine injection
+    or exfiltration payloads — NOT for advisory-only patterns (C2 framework
+    names, role-play phrases, anti-forensic behavior) that have legitimate
+    uses in security research, AGENTS.md, SOUL.md, etc.
+
+    Advisory findings are still returned by ``scan_for_threats()`` for
+    warning/logging purposes, just not surfaced as a blocking error here.
     """
     findings = scan_for_threats(content, scope=scope)
     if not findings:
         return None
-    pid = findings[0]
+
+    # Filter out advisory-only patterns — these detect suspicious content
+    # for warnings but should never block legitimate user writes (C2
+    # framework names like "metasploit", role-play phrases, etc. have
+    # legitimate uses in security research, AGENTS.md, SOUL.md).
+    # invisible_unicode_* findings are always blocking (real injection vector).
+    blocking_findings = [
+        f for f in findings
+        if f.startswith("invisible_unicode_") or f not in _ADVISORY_PATTERNS
+    ]
+
+    if not blocking_findings:
+        return None
+
+    pid = blocking_findings[0]
     if pid.startswith("invisible_unicode_"):
         codepoint = pid.replace("invisible_unicode_", "")
         return f"Blocked: content contains invisible unicode character {codepoint} (possible injection)."

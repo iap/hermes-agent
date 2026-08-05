@@ -270,14 +270,24 @@ def _repair_tool_call_arguments(raw_args: str, tool_name: str = "?") -> str:
     except (json.JSONDecodeError, TypeError, ValueError):
         pass
 
-    # Last resort: replace with empty object so the API request doesn't
-    # crash the entire session.
+    # Last resort: instead of silently replacing with '{}' (which causes the
+    # tool to execute with NO arguments, silently losing the user's entire
+    # command), return a minimal JSON object containing the raw truncated
+    # content under a `_raw_args` key. This preserves the user's intent
+    # so the LLM can see what was lost and retry, rather than the tool
+    # silently executing with empty arguments.
     logger.warning(
         "Unrepairable tool_call arguments for %s — "
-        "replaced with empty object (was: %s)",
+        "preserved raw content in _raw_args (was: %s)",
         tool_name, raw_stripped[:80],
     )
-    return "{}"
+    # Return the raw content inside a JSON object so it at least parses.
+    # The tool dispatcher will pass _raw_args to the handler, which can
+    # either ignore it or surface it to the user.
+    try:
+        return json.dumps({"_raw_args": raw_stripped[:2000]}, separators=(",", ":"))
+    except Exception:
+        return "{}"
 
 
 def close_interrupted_tool_sequence(messages: list, final_response: Any = None) -> bool:

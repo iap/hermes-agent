@@ -857,6 +857,12 @@ DEFAULT_CONFIG = {
         # case-insensitive substrings matched against the endpoint URL;
         # copilot.tencent.com is always treated as stream-only.
         "stream_only_base_urls": [],
+        # Exponential backoff for payment/402 errors on auxiliary providers.
+        # First 402 → unhealthy for payment_error_backoff_base_seconds,
+        # then doubles each consecutive failure (up to payment_error_backoff_max_seconds).
+        # Counter resets when the TTL expires. Defaults: 60s base, 300s cap.
+        "payment_error_backoff_base_seconds": 60,
+        "payment_error_backoff_max_seconds": 300,
         "vision": {
             "provider": "auto",    # auto | openrouter | nous | codex | custom
             "model": "",           # e.g. "google/gemini-2.5-flash", "gpt-4o"

@@ -1760,10 +1760,30 @@ class CredentialPool:
                 auth_mod._xai_proactive_refresh_skew_seconds(entry.access_token),
             )
         if self.provider == "nous":
-            # Nous refresh can require network access and should happen when
-            # runtime credentials are actually resolved, not merely when the pool
-            # is enumerated for listing, migration, or selection.
-            return False
+            # Nous runtime inference credentials are NAS invoke JWTs stored
+            # in agent_key / access_token. Unlike the old behavior (which
+            # always returned False, disabling proactive refresh), check
+            # whether the JWT is actually usable (not expired / wrong scope).
+            # If it's unusable and we haven't already kicked off a refresh,
+            # return True so _available_entries(refresh=True) will refresh it
+            # BEFORE the agent tries to use it — avoiding the 401 → EXHAUSTED
+            # → 401 cycle that burns 5-minute cooldowns.
+            #
+            # The helper does a zero-network structural expiry check (JWT
+            # exp claim + scope), so this is cheap and safe to call on
+            # every _available_entries scan.
+            token = entry.agent_key or entry.access_token
+            if not token:
+                return True  # No token at all — definitely needs refresh
+            try:
+                return not auth_mod._nous_invoke_jwt_is_usable(
+                    token,
+                    scope=getattr(entry, "scope", None),
+                    expires_at=entry.agent_key_expires_at or entry.expires_at,
+                )
+            except Exception:
+                # If we can't validate, err on the side of refreshing.
+                return True
         return False
 
     def select(self) -> Optional[PooledCredential]:

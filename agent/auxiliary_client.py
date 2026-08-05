@@ -3619,7 +3619,15 @@ def _get_provider_chain() -> List[tuple]:
 # session that adds up to dozens of doomed 402s.
 #
 # Solution: when ANY caller observes a payment error against a provider,
-# mark it unhealthy for ``_AUX_UNHEALTHY_TTL_SECONDS``. ``_resolve_auto``
+# mark it unhealthy with an exponentially increasing TTL. The first 402
+# sets a short 60s cooldown (so the user can add credits and get unblocked
+# within a minute, not 10 minutes). Each subsequent 402 before the TTL
+# expires doubles the cooldown. After the TTL expires, the provider gets
+# a fresh chance and the counter resets.
+#
+# The base and max TTLs are configurable via auxiliary config keys:
+#   auxiliary.payment_error_backoff_base_seconds  (default: 60)
+#   auxiliary.payment_error_backoff_max_seconds   (default: 300)
 # Step-2 and ``_try_payment_fallback`` both consult this cache and skip
 # unhealthy entries (logging once per skip-reason so the user sees what
 # happened). Entries auto-expire so a topped-up account recovers without
@@ -3629,9 +3637,11 @@ def _get_provider_chain() -> List[tuple]:
 # process won't inherit the unhealthy mark — that's intentional, since
 # the user might be running two profiles with different OpenRouter keys.
 
-_AUX_UNHEALTHY_TTL_SECONDS = 600  # 10 minutes
+_AUX_PAYMENT_BACKOFF_BASE = 60    # seconds — first 402 cooldown (overridden by config)
+_AUX_PAYMENT_BACKOFF_MAX = 300    # seconds — cap (overridden by config)
 _aux_unhealthy_until: Dict[str, float] = {}
 _aux_unhealthy_logged_at: Dict[str, float] = {}
+_aux_consecutive_payment_failures: Dict[str, int] = {}
 
 # Map provider names that show up in resolved_provider / explicit-config
 # back to the chain labels used by _get_provider_chain(). Keep in sync
@@ -3662,24 +3672,55 @@ def _mark_provider_unhealthy(provider: str, ttl: Optional[float] = None) -> None
     """Mark ``provider`` as recently-402'd, hidden from chain iteration
     until the TTL expires. Called from the payment-fallback branches in
     ``call_llm`` and ``acall_llm`` after a confirmed payment error.
+
+    If ``ttl`` is explicitly provided (e.g. rate-limit reset time), it
+    is used verbatim and the consecutive-failure counter is reset (the
+    caller is signaling a known-reset window, not a blind retry).
+
+    When ``ttl`` is None (default 402 path), exponential backoff is
+    applied: 60s → 120s → 240s → 300s (cap). The counter resets when
+    the provider's TTL expires (i.e. on the next successful probe or
+    after TTL elapses, whichever comes first).
     """
+    global _aux_consecutive_payment_failures
     label = _normalize_chain_label(provider)
     if not label:
         return
-    expires_at = time.time() + (ttl if ttl is not None else _AUX_UNHEALTHY_TTL_SECONDS)
+
+    if ttl is not None:
+        # Caller-specified TTL (e.g. rate-limit reset window) — use as-is
+        # and reset the backoff counter since this is a known recovery point.
+        expires_at = time.time() + ttl
+        _aux_consecutive_payment_failures.pop(label, None)
+    else:
+        # Exponential backoff: base * 2^(consecutive_failures), capped.
+        from hermes_cli.config import load_config_readonly
+        _cfg = load_config_readonly()
+        _base = int(_cfg.get("auxiliary", {}).get("payment_error_backoff_base_seconds", _AUX_PAYMENT_BACKOFF_BASE) or _AUX_PAYMENT_BACKOFF_BASE)
+        _max = int(_cfg.get("auxiliary", {}).get("payment_error_backoff_max_seconds", _AUX_PAYMENT_BACKOFF_MAX) or _AUX_PAYMENT_BACKOFF_MAX)
+        count = _aux_consecutive_payment_failures.get(label, 0)
+        backoff = min(
+            _base * (2 ** count),
+            _max,
+        )
+        expires_at = time.time() + backoff
+        _aux_consecutive_payment_failures[label] = count + 1
+
     _aux_unhealthy_until[label] = expires_at
     logger.warning(
         "Auxiliary: marking %s unhealthy for %ds (payment / credit error). "
         "Subsequent auxiliary calls will skip it until %s.",
         label,
-        int(ttl if ttl is not None else _AUX_UNHEALTHY_TTL_SECONDS),
+        int(expires_at - time.time()),
         time.strftime("%H:%M:%S", time.localtime(expires_at)),
     )
 
 
 def _is_provider_unhealthy(label: str) -> bool:
     """True iff ``label`` is in the unhealthy cache and the TTL hasn't expired.
-    Lazily evicts expired entries so the cache stays small.
+    Lazily evicts expired entries so the cache stays small.  When an entry
+    expires, the consecutive-failure counter is also reset so the provider
+    gets a fresh backoff cycle on its next 402.
     """
     if not label:
         return False
@@ -3689,6 +3730,7 @@ def _is_provider_unhealthy(label: str) -> bool:
     if time.time() >= expires_at:
         _aux_unhealthy_until.pop(label, None)
         _aux_unhealthy_logged_at.pop(label, None)
+        _aux_consecutive_payment_failures.pop(label, None)
         return False
     return True
 
@@ -3711,10 +3753,11 @@ def _log_skip_unhealthy(label: str, task: Optional[str] = None) -> None:
 
 def _reset_aux_unhealthy_cache() -> None:
     """Clear the unhealthy cache. Used by tests and by a future explicit
-    user trigger (e.g. ``hermes config aux reset``)."""
+    user trigger (e.g. ``hermes config aux reset``).
+    """
     _aux_unhealthy_until.clear()
     _aux_unhealthy_logged_at.clear()
-
+    _aux_consecutive_payment_failures.clear()
 
 def _is_payment_error(exc: Exception) -> bool:
     """Detect payment/credit/quota exhaustion errors.

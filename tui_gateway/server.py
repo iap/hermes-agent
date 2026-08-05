@@ -2136,6 +2136,36 @@ def _start_agent_build(sid: str, session: dict) -> None:
                 ensure_mcp_discovery_started()
             except Exception:
                 logger.warning("MCP discovery startup failed", exc_info=True)
+                # Schedule a background retry so a transient failure doesn't
+                # permanently disable MCP tools for the session. Retry up to
+                # 3 times with 30s spacing (90s window total).
+                import threading
+                def _retry_mcp_discovery():
+                    import time
+                    from tui_gateway.entry import ensure_mcp_discovery_started
+                    for attempt in range(3):
+                        time.sleep(30)
+                        try:
+                            ensure_mcp_discovery_started()
+                            logger.info(
+                                "MCP discovery background retry succeeded (attempt %d/3)",
+                                attempt + 1,
+                            )
+                            return
+                        except Exception:
+                            logger.debug(
+                                "MCP discovery background retry %d/3 failed",
+                                attempt + 1, exc_info=True,
+                            )
+                    logger.warning(
+                        "MCP discovery background retries exhausted (3/3). "
+                        "MCP tools remain unavailable for this session."
+                    )
+                threading.Thread(
+                    target=_retry_mcp_discovery,
+                    name="mcp-discovery-retry",
+                    daemon=True,
+                ).start()
 
             try:
                 # Lazy-resumed (watch) sessions carry the stored conversation

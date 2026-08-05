@@ -1186,23 +1186,66 @@ def skill_view(
                 "Skill name collision for '%s': %d candidates — %s",
                 name, len(candidates), "; ".join(paths),
             )
-            return json.dumps(
-                {
-                    "success": False,
-                    "error": (
-                        f"Ambiguous skill name '{name}': {len(candidates)} skills "
-                        "match across your local skills dir and external_dirs. "
-                        "Refusing to guess — load one explicitly by its categorized path."
-                    ),
-                    "matches": paths,
-                    "hint": (
-                        "Pass the full relative path instead of the bare name "
-                        "(e.g., 'category/skill-name'), or rename one of the "
-                        "colliding skills so each name is unique."
-                    ),
-                },
-                ensure_ascii=False,
-            )
+            # If all candidates share the same SKILL.md content (same
+            # name/version/author), prefer the categorized (category/name)
+            # path as the canonical location and load it, rather than
+            # erroring out.  This handles the common case of a skill living
+            # in both a flat dir and a categorized dir.
+            try:
+                contents = []
+                for _, smd in candidates:
+                    if smd.exists():
+                        contents.append(smd.read_text(encoding="utf-8"))
+                    else:
+                        contents.append("")
+                if len(set(contents)) == 1 and len(contents) > 1:
+                    # All identical — use the categorized path
+                    for _, smd in candidates:
+                        parent = smd.parent.name
+                        if parent != name:
+                            # This is the categorized location (parent dir
+                            # is the category, not the skill name itself)
+                            skill_dir = smd.parent.parent
+                            skill_md = smd
+                            break
+                    else:
+                        skill_dir, skill_md = candidates[0]
+                else:
+                    return json.dumps(
+                        {
+                            "success": False,
+                            "error": (
+                                f"Ambiguous skill name '{name}': {len(candidates)} skills "
+                                "match across your local skills dir and external_dirs. "
+                                "Refusing to guess — load one explicitly by its categorized path."
+                            ),
+                            "matches": paths,
+                            "hint": (
+                                "Pass the full relative path instead of the bare name "
+                                "(e.g., 'category/skill-name'), or rename one of the "
+                                "colliding skills so each name is unique."
+                            ),
+                        },
+                        ensure_ascii=False,
+                    )
+            except Exception:
+                return json.dumps(
+                    {
+                        "success": False,
+                        "error": (
+                            f"Ambiguous skill name '{name}': {len(candidates)} skills "
+                            "match across your local skills dir and external_dirs. "
+                            "Refusing to guess — load one explicitly by its categorized path."
+                        ),
+                        "matches": paths,
+                        "hint": (
+                            "Pass the full relative path instead of the bare name "
+                            "(e.g., 'category/skill-name'), or rename one of the "
+                            "colliding skills so each name is unique."
+                        ),
+                    },
+                    ensure_ascii=False,
+                )
 
         if candidates:
             skill_dir, skill_md = candidates[0]
