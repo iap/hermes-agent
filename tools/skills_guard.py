@@ -522,6 +522,19 @@ def format_scan_report(result: ScanResult) -> str:
     return "\n".join(lines + [f"Decision: {status} — {reason}"])
 
 
+def _declares_agent_plugins_v1(path: Path) -> bool:
+    """True only when *path* parses as a JSON object declaring the canonical
+    agent-plugins-v1 ``$schema``. Fail-closed: any read/parse error counts as
+    "not a plugin root" so a planted manifest cannot grant exemptions."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and (
+        data.get("$schema") == "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
+    )
+
+
 def _check_structure(skill_dir: Path, ignore=None) -> List[Finding]:
     """Structural anomalies (counts, sizes, binaries, stray executables, escaping symlinks); *ignore(rel) -> bool*
     excludes paths from every count and finding."""
@@ -558,7 +571,15 @@ def _check_structure(skill_dir: Path, ignore=None) -> List[Finding]:
         if ext not in _SCRIPT_EXTENSIONS and st.st_mode & 0o111:
             add("unexpected_executable", "medium", "structural", rel, "executable bit set",
                 "file has executable permission but is not a recognized script type")
-    if file_count > MAX_FILE_COUNT:
+
+    # File count limit. Skipped for agent-plugin roots: a portable plugin
+    # package legitimately bundles many skills, so the per-skill file-count
+    # rule does not apply to the package as a whole. The exemption requires
+    # the manifest to actually declare the agent-plugins-v1 $schema — a
+    # planted plugin.json alone must not disable the structural heuristic.
+    plugin_json = skill_dir / "plugin.json"
+    is_plugin_root = plugin_json.is_file() and _declares_agent_plugins_v1(plugin_json)
+    if file_count > MAX_FILE_COUNT and not is_plugin_root:
         add("too_many_files", "medium", "structural", "(directory)", f"{file_count} files",
             f"skill has {file_count} files (limit: {MAX_FILE_COUNT})")
     if total_size > MAX_TOTAL_SIZE_KB * 1024:  # informational only: large skills are legitimate
