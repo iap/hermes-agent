@@ -1,0 +1,48 @@
+/* Hermes × @trade/ui pilot — scoped token bridge.
+ *
+ * Maps the library's theme-role tokens (--ui-*) onto the dashboard's live theme
+ * tokens so ported controls inherit whichever Hermes theme is active, instead of
+ * bringing a second visual language. Scoped to `.pilot-trade-ui`; nothing global
+ * is touched and no other page is affected.
+ *
+ * Values mirror the shadcn-compat mappings in web/src/index.css (card / secondary
+ * / muted mixes of --midground-base and --background-base) so the pilot reads as
+ * part of the dashboard.
+ */
+.pilot-trade-ui {
+  /* Surfaces: let the host paint the page background. */
+  --ui-background: transparent;
+  --ui-surface: var(--background-base);
+  --ui-surface-1: color-mix(in srgb, var(--midground-base) 4%, var(--background-base));
+
+  /* Text */
+  --ui-on-surface: var(--midground);
+  --ui-on-surface-muted: color-mix(in srgb, var(--midground) 80%, transparent);
+  --ui-on-surface-disabled: color-mix(in srgb, var(--midground) 45%, transparent);
+
+  /* Accent pair — Hermes uses the cream midground as its accent. */
+  --ui-primary: var(--midground);
+  --ui-on-primary: var(--background-base);
+  --ui-secondary: color-mix(in srgb, var(--midground-base) 8%, var(--background-base));
+  --ui-on-secondary: var(--midground);
+
+  /* Lines + focus */
+  --ui-border-control: color-mix(in srgb, var(--midground-base) 22%, transparent);
+  --ui-outline: color-mix(in srgb, var(--midground-base) 14%, transparent);
+  --ui-focus-ring: var(--midground);
+
+  /* Feedback tones — the hues the dashboard already uses. */
+  --ui-error: #fb2c36;
+  --ui-on-error: #ffffff;
+  --ui-negative: #fb2c36;
+  --ui-positive: #4ade80;
+  --ui-warning: #fbbf24;
+  --ui-info: #34d399;
+
+  /* Interaction + rows */
+  --ui-hover-overlay: color-mix(in srgb, var(--midground-base) 6%, transparent);
+  --ui-row-alt: color-mix(in srgb, var(--midground-base) 2%, transparent);
+
+  /* Typography follows the active theme font. */
+  --ui-font-family: var(--theme-font-sans);
+}

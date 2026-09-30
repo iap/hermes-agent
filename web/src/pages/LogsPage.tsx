@@ -7,14 +7,21 @@ import {
 } from "react";
 import { FileText, RefreshCw } from "lucide-react";
 import { useSearchParams } from "react-router";
+import {
+  Banner,
+  Button,
+  Field,
+  Select,
+  Stack,
+  Switch,
+  Tabs,
+} from "@trade/ui";
+import "@trade/ui/styles.css";
 import { api } from "@/lib/api";
 import { Badge } from "@nous-research/ui/ui/components/badge";
-import { Button } from "@nous-research/ui/ui/components/button";
-import { FilterGroup, Segmented } from "@nous-research/ui/ui/components/segmented";
-import { Spinner } from "@nous-research/ui/ui/components/spinner";
-import { Switch } from "@nous-research/ui/ui/components/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "@nous-research/ui/ui/components/card";
 import { Label } from "@nous-research/ui/ui/components/label";
+import { Spinner } from "@nous-research/ui/ui/components/spinner";
 import { useI18n } from "@/i18n";
 import { usePageHeader } from "@/contexts/usePageHeader";
 import { PluginSlot } from "@/plugins";
@@ -23,6 +30,7 @@ import { PluginSlot } from "@/plugins";
 // text like "parse_errors=0" can't render an INFO line red.
 import { classifyLine } from "@/lib/log-classify";
 import { errorMessage } from "@/lib/api-error";
+import "./pilot-trade-ui.css";
 
 const FILES = ["agent", "errors", "gateway"] as const;
 const LEVELS = ["ALL", "DEBUG", "INFO", "WARNING", "ERROR"] as const;
@@ -36,16 +44,11 @@ const LINE_COLORS: Record<string, string> = {
   debug: "text-text-tertiary",
 };
 
+// PILOT: the filter controls below are @trade/ui components; labels stay on the
+// dashboard's type scale (minimum text-xs, per the web README typography rules).
+const labelClass = "text-xs text-muted-foreground";
+
 const formatFilterLabel = (value: string) => value.toUpperCase();
-
-const toSegmentOptions = <T extends string>(values: readonly T[]) =>
-  values.map((v) => ({ value: v, label: formatFilterLabel(v) }));
-
-const filterGroupClass =
-  "flex min-w-0 w-full flex-col items-start gap-1.5 sm:w-auto sm:max-w-full sm:flex-row sm:items-center";
-
-const segmentedClass =
-  "w-fit max-w-full flex-wrap justify-start self-start";
 
 type LogFile = (typeof FILES)[number];
 
@@ -91,18 +94,21 @@ export default function LogsPage() {
 
   useLayoutEffect(() => {
     setAfterTitle(
-      <span className="flex items-center gap-1.5">
+      <span
+        className="pilot-trade-ui flex items-center gap-1.5"
+        data-theme="dark"
+      >
         <Badge tone="secondary" className="text-xs">
           {formatFilterLabel(file)} · {formatFilterLabel(level)} ·{" "}
           {formatFilterLabel(component)}
         </Badge>
         <Button
-          type="button"
-          ghost
-          size="icon"
-          className="text-muted-foreground hover:text-foreground"
+          variant="ghost"
+          size="sm"
+          density="compact"
           onClick={fetchLogs}
           disabled={loading}
+          aria-busy={loading || undefined}
           aria-label={t.common.refresh}
         >
           {loading ? <Spinner /> : <RefreshCw />}
@@ -110,14 +116,17 @@ export default function LogsPage() {
       </span>,
     );
     setEnd(
-      <div className="flex w-full min-w-0 flex-wrap items-center justify-start gap-2 sm:justify-end sm:gap-3">
+      <div
+        className="pilot-trade-ui flex w-full min-w-0 flex-wrap items-center justify-start gap-2 sm:justify-end sm:gap-3"
+        data-theme="dark"
+      >
         <div className="flex items-center gap-2">
           <Label htmlFor="logs-auto-refresh" className="text-xs cursor-pointer">
             {t.logs.autoRefresh}
           </Label>
           <Switch
             checked={autoRefresh}
-            onCheckedChange={setAutoRefresh}
+            onChange={(e) => setAutoRefresh(e.currentTarget.checked)}
             id="logs-auto-refresh"
           />
           {autoRefresh && (
@@ -157,55 +166,83 @@ export default function LogsPage() {
     return () => clearInterval(interval);
   }, [autoRefresh, fetchLogs]);
 
+  const fileTabItems = FILES.map((value) => ({
+    key: value,
+    label: formatFilterLabel(value),
+  }));
+  const levelOptions = LEVELS.map((value) => ({
+    value,
+    label: formatFilterLabel(value),
+  }));
+  const componentOptions = COMPONENTS.map((value) => ({
+    value,
+    label: formatFilterLabel(value),
+  }));
+  const lineOptions = LINE_COUNTS.map((n) => ({
+    value: String(n),
+    label: String(n),
+  }));
+
   return (
-    <div className="flex min-w-0 max-w-full flex-col gap-4">
+    <div
+      className="pilot-trade-ui ui-root flex min-w-0 max-w-full flex-col gap-4"
+      data-theme="dark"
+    >
       <PluginSlot name="logs:top" />
-      <div
+      <Stack
+        direction="row"
+        gap={6}
+        wrap
         role="toolbar"
         aria-label={t.logs.title}
-        className="flex min-w-0 max-w-full flex-col items-start gap-3 sm:flex-row sm:flex-wrap sm:items-start sm:gap-x-6 sm:gap-y-3"
+        className="min-w-0 max-w-full items-start"
       >
-        <FilterGroup label={t.logs.file} className={filterGroupClass}>
-          <Segmented
-            className={segmentedClass}
+        <Stack gap={1} className="min-w-0">
+          <span className={labelClass}>{t.logs.file}</span>
+          <Tabs
+            items={fileTabItems}
             value={file}
-            onChange={setFile}
-            options={toSegmentOptions(FILES)}
+            onChange={(key) => {
+              if (isLogFile(key)) setFile(key);
+            }}
+            density="compact"
           />
-        </FilterGroup>
+        </Stack>
 
-        <FilterGroup label={t.logs.level} className={filterGroupClass}>
-          <Segmented
-            className={segmentedClass}
+        <Field label={t.logs.level} className="min-w-0">
+          <Select
+            options={levelOptions}
             value={level}
-            onChange={setLevel}
-            options={toSegmentOptions(LEVELS)}
+            variant="listbox"
+            density="compact"
+            onChange={(e) => setLevel(e.target.value as (typeof LEVELS)[number])}
           />
-        </FilterGroup>
+        </Field>
 
-        <FilterGroup label={t.logs.component} className={filterGroupClass}>
-          <Segmented
-            className={segmentedClass}
+        <Field label={t.logs.component} className="min-w-0">
+          <Select
+            options={componentOptions}
             value={component}
-            onChange={setComponent}
-            options={toSegmentOptions(COMPONENTS)}
-          />
-        </FilterGroup>
-
-        <FilterGroup label={t.logs.lines} className={filterGroupClass}>
-          <Segmented
-            className={segmentedClass}
-            value={String(lineCount)}
-            onChange={(v) =>
-              setLineCount(Number(v) as (typeof LINE_COUNTS)[number])
+            variant="listbox"
+            density="compact"
+            onChange={(e) =>
+              setComponent(e.target.value as (typeof COMPONENTS)[number])
             }
-            options={LINE_COUNTS.map((n) => ({
-              value: String(n),
-              label: String(n),
-            }))}
           />
-        </FilterGroup>
-      </div>
+        </Field>
+
+        <Field label={t.logs.lines} className="min-w-0">
+          <Select
+            options={lineOptions}
+            value={String(lineCount)}
+            variant="listbox"
+            density="compact"
+            onChange={(e) =>
+              setLineCount(Number(e.target.value) as (typeof LINE_COUNTS)[number])
+            }
+          />
+        </Field>
+      </Stack>
 
       <Card className="min-w-0 max-w-full overflow-hidden">
         <CardHeader className="py-3 px-4">
@@ -216,8 +253,8 @@ export default function LogsPage() {
         </CardHeader>
         <CardContent className="p-0">
           {error && (
-            <div className="bg-destructive/10 border-b border-destructive/20 p-3">
-              <p className="text-sm text-destructive">{error}</p>
+            <div className="p-3">
+              <Banner tone="danger">{error}</Banner>
             </div>
           )}
 
