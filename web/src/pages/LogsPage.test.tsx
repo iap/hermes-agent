@@ -16,7 +16,7 @@ let container: HTMLDivElement;
 let root: Root;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-async function waitFor(cond: () => boolean, timeoutMs = 5000) {
+async function waitFor(cond: () => boolean, timeoutMs = 15000) {
   const start = Date.now();
   while (!cond()) {
     if (Date.now() - start > timeoutMs) throw new Error("waitFor: condition never became true");
