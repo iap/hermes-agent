@@ -96,7 +96,6 @@ export default function LogsPage() {
     setAfterTitle(
       <span
         className="pilot-trade-ui flex items-center gap-1.5"
-        data-theme="dark"
       >
         <Badge tone="secondary" className="text-xs">
           {formatFilterLabel(file)} · {formatFilterLabel(level)} ·{" "}
@@ -118,7 +117,6 @@ export default function LogsPage() {
     setEnd(
       <div
         className="pilot-trade-ui flex w-full min-w-0 flex-wrap items-center justify-start gap-2 sm:justify-end sm:gap-3"
-        data-theme="dark"
       >
         <div className="flex items-center gap-2">
           <Label htmlFor="logs-auto-refresh" className="text-xs cursor-pointer">
@@ -186,7 +184,6 @@ export default function LogsPage() {
   return (
     <div
       className="pilot-trade-ui ui-root flex min-w-0 max-w-full flex-col gap-4"
-      data-theme="dark"
     >
       <PluginSlot name="logs:top" />
       <Stack

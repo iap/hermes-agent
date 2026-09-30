@@ -16,7 +16,7 @@ let container: HTMLDivElement;
 let root: Root;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-async function waitFor(cond: () => boolean, timeoutMs = 15000) {
+async function waitFor(cond: () => boolean, timeoutMs = 20000) {
   const start = Date.now();
   while (!cond()) {
     if (Date.now() - start > timeoutMs) throw new Error("waitFor: condition never became true");
@@ -88,6 +88,10 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
+// The dashboard suite can spend >45s in transform/import on a busy macOS 12 host before
+// the first assertion runs; the 15s default would fail on load, not on behaviour.
+const TEST_TIMEOUT = 120_000;
+
 describe("LogsPage — @trade/ui pilot port", () => {
   it("renders the filter controls as @trade/ui components and shows log lines", async () => {
     await renderLogsPage();
@@ -96,7 +100,7 @@ describe("LogsPage — @trade/ui pilot port", () => {
     expect(document.querySelectorAll(".ui-field").length).toBe(3);
     expect(document.querySelectorAll("[role='combobox']").length).toBe(3);
     expect(document.body.textContent).toContain("web_fetch failed");
-  });
+  }, TEST_TIMEOUT);
 
   it("switching the file tab refetches through the page's own data layer", async () => {
     await renderLogsPage();
@@ -111,5 +115,5 @@ describe("LogsPage — @trade/ui pilot port", () => {
     expect(
       apiMocks.getLogs.mock.calls.some((call) => (call[0] as { file?: string })?.file === "errors"),
     ).toBe(true);
-  });
+  }, TEST_TIMEOUT);
 });
