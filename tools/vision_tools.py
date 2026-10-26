@@ -420,6 +420,50 @@ def _import_pillow_for_resize():
     return Image
 
 
+def _ocr_engine_available() -> Optional[str]:
+    """Return the name of an available OCR engine, or None.
+
+    Prefers the ``tesseract`` binary (fast, accurate, no Python deps beyond
+    the wrapper); falls back to ``pytesseract`` if importable. Returns None
+    when no engine is installed so callers can degrade gracefully.
+    """
+    import shutil
+    if shutil.which("tesseract"):
+        return "tesseract"
+    try:
+        import pytesseract  # noqa: F401
+        if shutil.which("tesseract"):
+            return "pytesseract"
+    except ImportError:
+        pass
+    return None
+
+
+async def _ocr_image_text(image_path: Path) -> Optional[str]:
+    """Run OCR on *image_path* and return extracted text, or None on failure/no engine.
+
+    Uses the ``tesseract`` binary directly (no Python dependency) so it works
+    even when Pillow/pytesseract are absent. Returns None when no engine is
+    installed or OCR fails, so callers can fall back to a helpful message.
+    """
+    import asyncio
+    import shutil
+    if not shutil.which("tesseract"):
+        return None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "tesseract", str(image_path), "stdout", "--psm", "6",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        stdout, _ = await proc.communicate()
+        if proc.returncode != 0:
+            return None
+        text = stdout.decode("utf-8", errors="replace").strip()
+        return text or None
+    except Exception as exc:
+        logger.debug("OCR failed: %s", exc)
+        return None
+
+
 def _resize_image_for_vision(image_path: Path, mime_type: Optional[str] = None,
                               max_base64_bytes: int = _RESIZE_TARGET_BYTES,
                               max_dimension: Optional[int] = None,
@@ -910,19 +954,33 @@ async def vision_analyze_tool(
         call_kwargs = _aux_call_kwargs(messages, model, 120.0)
         _load_auxiliary_client()
         try:
-            response = await async_call_llm(**call_kwargs)
-        except Exception as _api_err:
-            if not (_is_image_size_error(_api_err) and len(image_data_url) > _RESIZE_TARGET_BYTES):
-                raise
-            logger.info(
-                "API rejected image (%.1f MB, likely too large); auto-resizing to ~%.0f MB and retrying...",
-                len(image_data_url) / (1024 * 1024), _RESIZE_TARGET_BYTES / (1024 * 1024))
-            image_data_url = await _resize_prepared(prepared, _scale_info)
-            messages[0]["content"][1]["image_url"]["url"] = image_data_url
-            response = await async_call_llm(**call_kwargs)
-        analysis = await _call_vision_llm(
-            call_kwargs, "Vision LLM returned empty content, retrying once", response)
-        return analysis, _build_scale_note(_scale_info or None, prepared.crop_offset or None)
+            try:
+                response = await async_call_llm(**call_kwargs)
+            except Exception as _api_err:
+                if not (_is_image_size_error(_api_err) and len(image_data_url) > _RESIZE_TARGET_BYTES):
+                    raise
+                logger.info(
+                    "API rejected image (%.1f MB, likely too large); auto-resizing to ~%.0f MB and retrying...",
+                    len(image_data_url) / (1024 * 1024), _RESIZE_TARGET_BYTES / (1024 * 1024))
+                image_data_url = await _resize_prepared(prepared, _scale_info)
+                messages[0]["content"][1]["image_url"]["url"] = image_data_url
+                response = await async_call_llm(**call_kwargs)
+            analysis = await _call_vision_llm(
+                call_kwargs, "Vision LLM returned empty content, retrying once", response)
+            return analysis, _build_scale_note(_scale_info or None, prepared.crop_offset or None)
+        except Exception as _vision_err:
+            # Fallback for text-only models / providers without vision support:
+            # attempt local OCR (tesseract) so the image is still readable.
+            logger.info("Vision LLM failed (%s); attempting OCR fallback", _vision_err)
+            ocr_text = await _ocr_image_text(prepared.path)
+            if ocr_text:
+                note = _build_scale_note(_scale_info or None, prepared.crop_offset or None)
+                analysis = ("OCR fallback (vision model unavailable):\n" + ocr_text)
+                if prompt and isinstance(prompt, str) and prompt.strip():
+                    analysis += f"\n\nQuestion: {prompt.strip()}"
+                return analysis, note
+            # No OCR available: re-raise so the caller gets the original error.
+            raise
     return await _run_analysis("image", image_url, user_prompt, model, stage)
 
 

@@ -706,6 +706,76 @@ class TestErrorClassification:
         assert "smaller" in result["analysis"].lower()
 
 
+# ---------------------------------------------------------------------------
+# OCR fallback — text-only models / providers without vision support
+# ---------------------------------------------------------------------------
+
+
+class TestOcrFallback:
+    """When the vision LLM fails, fall back to local OCR (tesseract)."""
+
+    @pytest.mark.asyncio
+    async def test_vision_failure_falls_back_to_ocr_text(self, tmp_path):
+        img = tmp_path / "test.png"
+        img.write_bytes(VALID_PNG)
+
+        with (
+            patch(
+                "tools.vision_tools._image_to_base64_data_url",
+                return_value="data:image/png;base64,abc",
+            ),
+            patch(
+                "tools.vision_tools.async_call_llm",
+                new_callable=AsyncMock,
+                side_effect=Exception(
+                    "Error code: 400 - Beam supports text input only"
+                ),
+            ),
+            patch(
+                "tools.vision_tools._ocr_image_text",
+                new_callable=AsyncMock,
+                return_value="HELLO OCR",
+            ) as ocr,
+        ):
+            result = json.loads(await vision_analyze_tool(str(img), "what text?", "test/model"))
+
+        assert result["success"] is True
+        assert "HELLO OCR" in result["analysis"]
+        ocr.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_vision_failure_without_ocr_engine_still_errors(self, tmp_path):
+        img = tmp_path / "test.png"
+        img.write_bytes(VALID_PNG)
+
+        with (
+            patch(
+                "tools.vision_tools._image_to_base64_data_url",
+                return_value="data:image/png;base64,abc",
+            ),
+            patch(
+                "tools.vision_tools.async_call_llm",
+                new_callable=AsyncMock,
+                side_effect=Exception("Beam supports text input only"),
+            ),
+            patch(
+                "tools.vision_tools._ocr_image_text",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
+            result = json.loads(await vision_analyze_tool(str(img), "what text?", "test/model"))
+
+        assert result["success"] is False
+
+    @pytest.mark.asyncio
+    async def test_ocr_image_text_returns_none_without_tesseract(self, tmp_path):
+        from tools.vision_tools import _ocr_image_text
+
+        img = tmp_path / "test.png"
+        img.write_bytes(VALID_PNG)
+        with patch("shutil.which", return_value=None):
+            assert await _ocr_image_text(img) is None
 
 
 # ---------------------------------------------------------------------------
